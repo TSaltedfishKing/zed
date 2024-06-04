@@ -64,6 +64,15 @@ use time::UtcOffset;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::*;
 
+/// Get the foreground and background executors for the current platform.
+pub fn current_platform_executors() -> (ForegroundExecutor, BackgroundExecutor) {
+    let platform = current_platform();
+    (
+        platform.foreground_executor(),
+        platform.background_executor(),
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn current_platform() -> Rc<dyn Platform> {
     Rc::new(MacPlatform::new())
