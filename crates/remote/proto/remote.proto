@@ -1,0 +1,30 @@
+syntax = "proto3";
+package remote.messages;
+
+message Envelope {
+    uint32 id = 1;
+    optional uint32 responding_to = 2;
+
+    oneof payload {
+        Error error = 3;
+        Ping ping = 4;
+        Pong pong = 5;
+        ReadFile read_file = 6;
+        ReadFileResponse read_file_response = 7;
+    }
+}
+
+message Ping {}
+message Pong {}
+
+message Error {
+    string message = 1;
+}
+
+message ReadFile {
+    string path = 1;
+}
+
+message ReadFileResponse {
+    string content = 1;
+}

@@ -1,0 +1,38 @@
+[package]
+name = "remote"
+description = "Logic for remote editing"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/remote.rs"
+doctest = false
+
+[[bin]]
+name = "remote_server"
+path = "src/remote_server.rs"
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+gpui.workspace = true
+log.workspace = true
+prost.workspace = true
+smol.workspace = true
+util.workspace = true
+async-ssh2-lite = { version = "0.4", default-features = false, features = ["async-io"] }
+
+[build-dependencies]
+prost-build.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
