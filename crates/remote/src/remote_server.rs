@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
+use text::LineEnding;
 use util::ResultExt;
 
 fn main() {
@@ -93,8 +94,10 @@ impl Server {
             Payload::ReadFile(request) => self.read_file(request, response).await,
             Payload::ReadDir(request) => self.read_dir(request, response).await,
             Payload::ReadLink(request) => self.read_link(request, response).await,
+            Payload::Canonicalize(request) => self.canonicalize(request, response).await,
             Payload::Stat(request) => self.stat(request, response).await,
             Payload::Watch(request) => self.watch(request, response).await,
+            Payload::WriteFile(request) => self.write_file(request, response).await,
             _ => {
                 response.send_error(anyhow!("unhandled request type"));
                 Ok(())
@@ -115,6 +118,12 @@ impl Server {
 
     async fn read_link(&self, request: proto::ReadLink, response: Response) -> Result<()> {
         let content = self.fs.read_link(Path::new(&request.path)).await?;
+        response.send(Payload::String(content.to_string_lossy().to_string()));
+        Ok(())
+    }
+
+    async fn canonicalize(&self, request: proto::Canonicalize, response: Response) -> Result<()> {
+        let content = self.fs.canonicalize(Path::new(&request.path)).await?;
         response.send(Payload::String(content.to_string_lossy().to_string()));
         Ok(())
     }
@@ -175,6 +184,20 @@ impl Server {
             response.send(Payload::Metadata(proto_metadata));
         }
         Ok(())
+    }
+
+    async fn write_file(&self, request: proto::WriteFile, _: Response) -> Result<()> {
+        self.fs
+            .save(
+                Path::new(&request.path),
+                &request.content.into(),
+                if request.line_ending == proto::write_file::LineEnding::Unix as i32 {
+                    LineEnding::Unix
+                } else {
+                    LineEnding::Windows
+                },
+            )
+            .await
     }
 }
 

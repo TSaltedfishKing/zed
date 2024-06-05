@@ -10,7 +10,7 @@ use futures::{channel::mpsc, Stream};
 use futures::{select_biased, AsyncReadExt as _, FutureExt as _, StreamExt as _};
 use gpui::{BackgroundExecutor, Task};
 use parking_lot::Mutex;
-use smol::Async;
+use smol::{fs::unix::MetadataExt, Async};
 use std::{
     net::{SocketAddr, TcpStream},
     path::Path,
@@ -20,11 +20,11 @@ use std::{
         Arc, Weak,
     },
     task,
+    time::Instant,
 };
 
-const SERVER_BINARY_LOCAL_PATH: &str = "target/debug/remote_server";
-const SERVER_BINARY_REMOTE_PATH: &str = "./.remote_server";
-// const SERVER_BINARY_REMOTE_PATH: &str = "/Users/max/code/zed/target/debug/remote_server";
+const SERVER_BINARY_LOCAL_PATH: &str = "target/release/remote_server";
+const SERVER_BINARY_REMOTE_PATH: &str = "./.zed_remote_server";
 
 pub struct SshSession {
     next_message_id: AtomicU32,
@@ -84,6 +84,7 @@ impl SshSession {
                 select_biased! {
                     input = stdin_rx.next().fuse() => {
                         if let Some(input) = input {
+                            log::info!("send message: {input:?}");
                             write_message(&mut channel, &mut stdin_buffer, input).await?;
                         } else {
                             return Ok(())
@@ -109,6 +110,7 @@ impl SshSession {
                                 let message_len = message_len_from_buffer(&stdout_buffer);
                                 match read_message_with_len(&mut channel, &mut stdout_buffer, message_len).await {
                                     Ok(envelope) => {
+                                        log::info!("receive message: {envelope:?}");
                                         stdout_tx.unbounded_send(envelope).ok();
                                     }
                                     Err(error) => {
@@ -229,14 +231,20 @@ async fn ensure_server_binary<S: AsyncSessionStream + Send + Sync + 'static>(
         .await
         .context("failed to initialize sftp channel")?;
 
-    // let server_binary_exists = ftp
-    //     .stat(dst_path)
-    //     .await
-    //     .map_or(false, |stats| stats.is_file());
-    // if server_binary_exists {
-    //     return Ok(());
-    // }
+    let src_stat = smol::fs::metadata(src_path).await?;
+    let size = src_stat.size();
+    let perm = Some(0o755);
+    let dst_stat = ftp.stat(dst_path).await.ok();
+    let server_binary_exists = dst_stat.map_or(false, |stats| {
+        stats.is_file() && stats.size == Some(src_stat.size()) && stats.perm == perm
+    });
+    if server_binary_exists {
+        log::info!("remote development server already present",);
+        return Ok(());
+    }
 
+    let t0 = Instant::now();
+    log::info!("uploading remote development server ({size} bytes)",);
     let mut src_file = smol::fs::File::open(src_path)
         .await
         .with_context(|| format!("failed to open server binary {src_path:?}"))?;
@@ -246,7 +254,7 @@ async fn ensure_server_binary<S: AsyncSessionStream + Send + Sync + 'static>(
         .context("failed to create server binary")?;
     let result = smol::io::copy(&mut src_file, &mut dst_file).await;
     let mut stat = ftp.stat(dst_path).await?;
-    stat.perm = Some(0o755);
+    stat.perm = perm;
     ftp.setstat(dst_path, stat).await?;
     if result.is_err() {
         ftp.unlink(dst_path)
@@ -254,6 +262,7 @@ async fn ensure_server_binary<S: AsyncSessionStream + Send + Sync + 'static>(
             .context("failed to remove server binary")?;
     }
     result?;
+    log::info!("uploaded remote development server in {:?}", t0.elapsed());
 
     Ok(())
 }

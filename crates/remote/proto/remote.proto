@@ -13,10 +13,12 @@ message Envelope {
         ReadFile read_file = 7;
         ReadDir read_dir = 8;
         ReadLink read_link = 9;
-        Stat stat = 10;
-        Metadata metadata = 11;
-        Watch watch = 12;
-        Event event = 13;
+        Canonicalize canonicalize = 10;
+        Stat stat = 11;
+        Metadata metadata = 12;
+        Watch watch = 13;
+        Event event = 14;
+        WriteFile write_file = 15;
     }
 }
 
@@ -32,11 +34,26 @@ message ReadFile {
     string path = 1;
 }
 
+message WriteFile {
+    string path = 1;
+    string content = 2;
+    LineEnding line_ending = 3;
+
+    enum LineEnding {
+        Unix = 0;
+        Windows = 1;
+    }
+}
+
 message ReadDir {
     string path = 1;
 }
 
 message ReadLink {
+    string path = 1;
+}
+
+message Canonicalize {
     string path = 1;
 }
 

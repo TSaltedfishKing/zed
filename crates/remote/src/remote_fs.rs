@@ -1,3 +1,6 @@
+// todo!(remove)
+#![allow(unused)]
+
 use crate::{
     protocol::{self as proto, envelope::Payload},
     SshSession,
@@ -105,11 +108,38 @@ impl Fs for RemoteFs {
     }
 
     async fn save(&self, path: &Path, text: &Rope, line_ending: LineEnding) -> Result<()> {
-        Err(anyhow!("not implemented"))
+        let response = self
+            .session
+            .send(Payload::WriteFile(proto::WriteFile {
+                path: path.to_string_lossy().to_string(),
+                content: text.to_string(),
+                line_ending: match line_ending {
+                    LineEnding::Unix => proto::write_file::LineEnding::Unix as i32,
+                    LineEnding::Windows => proto::write_file::LineEnding::Windows as i32,
+                },
+            }))
+            .next()
+            .await;
+        match response {
+            Some(Payload::Error(error)) => Err(anyhow!("{}", error.message)),
+            Some(_) => Err(anyhow!("unexpected response")),
+            None => Ok(()),
+        }
     }
 
     async fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
-        Err(anyhow!("not implemented"))
+        let response = self
+            .session
+            .send(Payload::Canonicalize(proto::Canonicalize {
+                path: path.to_string_lossy().to_string(),
+            }))
+            .one()
+            .await?;
+        if let Payload::String(response) = response {
+            Ok(response.into())
+        } else {
+            Err(anyhow!("unexpected response"))
+        }
     }
 
     async fn is_file(&self, path: &Path) -> bool {
