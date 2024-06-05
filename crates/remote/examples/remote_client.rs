@@ -1,7 +1,10 @@
 use fs::Fs as _;
 use gpui::App;
 use remote::{RemoteFs, SshSession};
-use smol::stream::StreamExt;
+use smol::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    stream::StreamExt,
+};
 use std::time::Duration;
 
 fn main() {
@@ -15,10 +18,10 @@ fn main() {
                 let session = SshSession::new(address, "testuser", "password", executor.clone())
                     .await
                     .unwrap();
-                let fs = RemoteFs::new(session);
+                let fs = RemoteFs::new(session.clone());
 
                 for i in 0.. {
-                    match i % 3 {
+                    match i % 4 {
                         0 => {
                             eprintln!("load file:");
                             let contents = fs.load(".zsh_history".as_ref()).await;
@@ -35,6 +38,21 @@ fn main() {
                             eprintln!("stat dir:");
                             let metadata = fs.metadata(".".as_ref()).await.unwrap();
                             eprintln!("  metadata: {metadata:?}");
+                        }
+                        3 => {
+                            eprintln!("run subprocess:");
+                            let mut process = session.spawn_process("cut -c1-5".into()).await;
+                            for i in 0..10 {
+                                process
+                                    .stdin
+                                    .write_all(format!("{i} asdfadsfadsfdsa\n").as_bytes())
+                                    .await
+                                    .unwrap();
+                            }
+                            process.stdin.close().unwrap();
+                            let mut stdout = String::new();
+                            process.stdout.read_to_string(&mut stdout).await.unwrap();
+                            eprintln!("  cut output: {stdout:?}");
                         }
                         _ => {}
                     };

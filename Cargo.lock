@@ -8350,6 +8350,7 @@ name = "remote"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-pipe",
  "async-ssh2-lite",
  "async-tar",
  "async-trait",
