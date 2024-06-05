@@ -18,21 +18,30 @@ name = "remote_server"
 path = "src/remote_server.rs"
 
 [features]
-test-support = []
+default = []
+test-support = ["fs/test-support"]
 
 [dependencies]
 anyhow.workspace = true
+async-ssh2-lite = { version = "0.4", default-features = false, features = ["async-io"] }
+async-tar.workspace = true
+async-trait.workspace = true
+collections.workspace = true
 env_logger.workspace = true
+fs.workspace = true
+git.workspace = true
 futures.workspace = true
 gpui.workspace = true
 log.workspace = true
+parking_lot.workspace = true
 prost.workspace = true
 smol.workspace = true
+text.workspace = true
 util.workspace = true
-async-ssh2-lite = { version = "0.4", default-features = false, features = ["async-io"] }
 
 [build-dependencies]
 prost-build.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+fs = { workspace = true, features = ["test-support"] }

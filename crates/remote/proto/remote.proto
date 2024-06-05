@@ -7,14 +7,21 @@ message Envelope {
 
     oneof payload {
         Error error = 3;
-        Ping ping = 4;
-        Pong pong = 5;
-        ReadFile read_file = 6;
-        ReadFileResponse read_file_response = 7;
+        string string = 4;
+        Ping ping = 5;
+        Pong pong = 6;
+        ReadFile read_file = 7;
+        ReadDir read_dir = 8;
+        ReadLink read_link = 9;
+        Stat stat = 10;
+        Metadata metadata = 11;
+        Watch watch = 12;
+        Event event = 13;
     }
 }
 
 message Ping {}
+
 message Pong {}
 
 message Error {
@@ -25,6 +32,30 @@ message ReadFile {
     string path = 1;
 }
 
-message ReadFileResponse {
-    string content = 1;
+message ReadDir {
+    string path = 1;
+}
+
+message ReadLink {
+    string path = 1;
+}
+
+message Watch {
+    string path = 1;
+    uint64 latency = 2;
+}
+
+message Stat {
+    string path = 1;
+}
+
+message Metadata {
+    uint64 inode = 1;
+    uint64 mtime = 2;
+    bool is_symlink = 3;
+    bool is_dir = 4;
+}
+
+message Event {
+    repeated string paths = 1;
 }

@@ -6,6 +6,9 @@ use prost::Message as _;
 
 include!(concat!(env!("OUT_DIR"), "/remote.messages.rs"));
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct MessageId(pub u32);
+
 pub type MessageLen = u32;
 pub const MESSAGE_LEN_SIZE: usize = size_of::<MessageLen>();
 

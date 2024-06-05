@@ -77,6 +77,7 @@ pub fn current_platform_executors() -> (ForegroundExecutor, BackgroundExecutor) 
 pub(crate) fn current_platform() -> Rc<dyn Platform> {
     Rc::new(MacPlatform::new())
 }
+
 #[cfg(target_os = "linux")]
 pub(crate) fn current_platform() -> Rc<dyn Platform> {
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
@@ -93,6 +94,7 @@ pub(crate) fn current_platform() -> Rc<dyn Platform> {
         Rc::new(HeadlessClient::new())
     }
 }
+
 // todo("windows")
 #[cfg(target_os = "windows")]
 pub(crate) fn current_platform() -> Rc<dyn Platform> {

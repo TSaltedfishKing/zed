@@ -8351,13 +8351,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-ssh2-lite",
+ "async-tar",
+ "async-trait",
+ "collections",
  "env_logger",
+ "fs",
  "futures 0.3.28",
+ "git",
  "gpui",
  "log",
+ "parking_lot 0.12.1",
  "prost",
  "prost-build",
  "smol",
+ "text",
  "util",
 ]
 

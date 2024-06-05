@@ -1,8 +1,7 @@
+use fs::Fs as _;
 use gpui::App;
-use remote::{
-    protocol::{envelope::Payload, Ping, ReadFile},
-    SshSession,
-};
+use remote::{RemoteFs, SshSession};
+use smol::stream::StreamExt;
 use std::time::Duration;
 
 fn main() {
@@ -16,26 +15,31 @@ fn main() {
                 let session = SshSession::new(address, "testuser", "password", executor.clone())
                     .await
                     .unwrap();
+                let fs = RemoteFs::new(session);
 
                 for i in 0.. {
-                    let request = if i % 2 == 0 {
-                        Payload::Ping(Ping {})
-                    } else {
-                        Payload::ReadFile(ReadFile {
-                            path: "/the/path".into(),
-                        })
+                    match i % 3 {
+                        0 => {
+                            eprintln!("load file:");
+                            let contents = fs.load(".zsh_history".as_ref()).await;
+                            eprintln!("  contents: {contents:?}");
+                        }
+                        1 => {
+                            eprintln!("read dir:");
+                            let mut stream = fs.read_dir(".".as_ref()).await.unwrap();
+                            while let Some(entry) = stream.next().await {
+                                eprintln!("  entry: {entry:?}");
+                            }
+                        }
+                        2 => {
+                            eprintln!("stat dir:");
+                            let metadata = fs.metadata(".".as_ref()).await.unwrap();
+                            eprintln!("  metadata: {metadata:?}");
+                        }
+                        _ => {}
                     };
 
-                    dbg!(&request);
-                    session.send(request).await;
-
-                    if let Some((payload, reply_to)) = session.recv().await {
-                        println!("{:?} {:?}", payload, reply_to);
-                        executor.timer(Duration::from_millis(100)).await;
-                    } else {
-                        println!("done");
-                        break;
-                    }
+                    executor.timer(Duration::from_millis(100)).await;
                 }
             })
             .detach();
