@@ -220,7 +220,7 @@ pub async fn open_ssh_paths(
             continue;
         };
 
-        let fs = Arc::new(remote::RemoteFs::new(session));
+        let fs = Arc::new(remote::RemoteFs::new(session.clone()));
         let project = cx.update(|cx| {
             project::Project::local(
                 app_state.client.clone(),
@@ -233,6 +233,7 @@ pub async fn open_ssh_paths(
         })?;
         project
             .update(cx, |project, cx| {
+                project.set_ssh_session(session);
                 project.find_or_create_local_worktree(&path.path, true, cx)
             })?
             .await?;

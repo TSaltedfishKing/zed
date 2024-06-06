@@ -14,7 +14,7 @@ use futures::{
 use futures::{select_biased, AsyncReadExt as _, FutureExt as _, StreamExt as _};
 use gpui::BackgroundExecutor;
 use parking_lot::Mutex;
-use smol::{fs::unix::MetadataExt, Async};
+use smol::{fs::unix::MetadataExt, io, Async};
 use std::{
     net::{SocketAddr, TcpStream},
     path::Path,
@@ -90,71 +90,99 @@ impl SshSession {
 
                     select_biased! {
                         input = stdin_rx.next().fuse() => {
-                            if let Some(input) = input {
-                                log::info!("send message: {input:?}");
-                                write_message(&mut channel, &mut stdin_buffer, input).await?;
-                            } else {
-                                return anyhow::Ok(())
-                            }
+                            let Some(input) = input else {
+                                return anyhow::Ok(());
+                            };
+
+                            log::info!("send message: {input:?}");
+                            write_message(&mut channel, &mut stdin_buffer, input).await?;
                         }
 
                         request = spawn_process_rx.next().fuse() => {
-                            if let Some(request) = request {
-                                log::info!("spawn process: {:?}", request.command);
-                                let mut channel = session
-                                    .channel_session()
-                                    .await
-                                    .context("failed to create channel")?;
-                                channel.exec(&request.command).await?;
-                                let (stdin_tx, mut stdin_rx) = async_pipe::pipe();
-                                let (mut stdout_tx, stdout_rx) = async_pipe::pipe();
-                                request.process_tx.send(SshChildProcess {
-                                    stdin: stdin_tx,
-                                    stdout: stdout_rx,
-                                }).ok();
-                                executor.spawn(async move {
-                                    let mut stdin_buffer = [0; 1024];
-                                    let mut stdout_buffer = [0; 1024];
-                                    loop {
-                                        select_biased! {
-                                            read1 = channel.read(&mut stdout_buffer).fuse() => {
-                                                match dbg!(read1) {
-                                                    Ok(len) => {
-                                                        if len == 0 {
-                                                            stdout_tx.close().ok();
-                                                            break;
-                                                        }
-                                                        stdout_tx.write_all(&stdout_buffer[..len]).await?;
+                            let Some(request) = request else {
+                                return Ok(());
+                            };
+
+                            log::info!("spawn process: {:?}", request.command);
+                            let mut channel = session
+                                .channel_session()
+                                .await
+                                .context("failed to create channel")?;
+                            channel.exec(&request.command).await?;
+                            let mut stderr = channel.stderr();
+
+                            let (stdin_tx, mut stdin_rx) = async_pipe::pipe();
+                            let (mut stdout_tx, stdout_rx) = async_pipe::pipe();
+                            let (mut stderr_tx, stderr_rx) = async_pipe::pipe();
+                            let (exit_tx, exit_rx) = oneshot::channel();
+                            request.process_tx.send(SshChildProcess {
+                                stdin: stdin_tx,
+                                stdout: stdout_rx,
+                                stderr: stderr_rx,
+                                exit: exit_rx,
+                            }).ok();
+
+                            executor.spawn(async move {
+                                let mut stdin_buffer = [0; 1024];
+                                let mut stdout_buffer = [0; 1024];
+                                let mut stderr_buffer = [0; 1024];
+                                loop {
+                                    select_biased! {
+                                        read = channel.read(&mut stdout_buffer).fuse() => {
+                                            match read {
+                                                Ok(len) => {
+                                                    if len == 0 {
+                                                        stdout_tx.close().ok();
+                                                        break;
                                                     }
-                                                    Err(error) => {
-                                                        log::error!("error reading stdout: {error:?}");
-                                                        break
-                                                    }
+                                                    stdout_tx.write_all(&stdout_buffer[..len]).await?;
+                                                }
+                                                Err(error) => {
+                                                    log::error!("error reading stdout: {error:?}");
+                                                    break
                                                 }
                                             }
-                                            read = stdin_rx.read(&mut stdin_buffer).fuse() => {
-                                                match dbg!(read) {
-                                                    Ok(len) => {
-                                                        if len == 0 {
-                                                            channel.send_eof().await?;
-                                                            smol::io::copy(&mut channel, &mut stdout_tx).await?;
-                                                            break;
-                                                        }
-                                                        channel.write_all(&stdin_buffer[..len]).await?;
+                                        }
+                                        read = stderr.read(&mut stderr_buffer).fuse() => {
+                                            match read {
+                                                Ok(len) => {
+                                                    if len == 0 {
+                                                        stderr_tx.close().ok();
+                                                        break;
                                                     }
-                                                    Err(error) => {
-                                                        log::error!("error reading stdout: {error:?}");
-                                                        break
+                                                    stderr_tx.write_all(&stderr_buffer[..len]).await?;
+                                                }
+                                                Err(error) => {
+                                                    log::error!("error reading stdout: {error:?}");
+                                                    break
+                                                }
+                                            }
+                                        }
+                                        read = stdin_rx.read(&mut stdin_buffer).fuse() => {
+                                            match read {
+                                                Ok(len) => {
+                                                    if len == 0 {
+                                                        channel.send_eof().await?;
+                                                        break;
                                                     }
+                                                    channel.write_all(&stdin_buffer[..len]).await?;
+                                                }
+                                                Err(error) => {
+                                                    log::error!("error reading stdout: {error:?}");
+                                                    break
                                                 }
                                             }
                                         }
                                     }
-                                    anyhow::Ok(())
-                                }).detach();
-                            } else {
-                                return Ok(())
-                            }
+                                }
+
+                                io::copy(&mut channel, &mut stdout_tx).await?;
+                                io::copy(&mut stderr, &mut stderr_tx).await?;
+                                if let Ok(status) = channel.exit_status() {
+                                    exit_tx.send(status).ok();
+                                }
+                                anyhow::Ok(())
+                            }).detach();
                         }
 
                         result = channel.read(&mut stdout_buffer).fuse() => {
@@ -281,6 +309,8 @@ struct SpawnRequest {
 pub struct SshChildProcess {
     pub stdin: PipeWriter,
     pub stdout: PipeReader,
+    pub stderr: PipeReader,
+    pub exit: oneshot::Receiver<i32>,
 }
 
 impl SshResponseStream {
@@ -341,7 +371,7 @@ async fn ensure_server_binary<S: AsyncSessionStream + Send + Sync + 'static>(
         .create(dst_path)
         .await
         .context("failed to create server binary")?;
-    let result = smol::io::copy(&mut src_file, &mut dst_file).await;
+    let result = io::copy(&mut src_file, &mut dst_file).await;
     let mut stat = ftp.stat(dst_path).await?;
     stat.perm = perm;
     ftp.setstat(dst_path, stat).await?;

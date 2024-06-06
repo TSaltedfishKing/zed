@@ -68,6 +68,7 @@ use postage::watch;
 use prettier_support::{DefaultPrettier, PrettierInstance};
 use project_settings::{LspSettings, ProjectSettings};
 use rand::prelude::*;
+use remote::SshSession;
 use rpc::{ErrorCode, ErrorExt as _};
 use search::SearchQuery;
 use search_history::SearchHistory;
@@ -75,8 +76,11 @@ use serde::Serialize;
 use settings::{watch_config_file, Settings, SettingsLocation, SettingsStore};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
-use smol::channel::{Receiver, Sender};
-use smol::lock::Semaphore;
+use smol::{
+    channel::{Receiver, Sender},
+    io::AsyncReadExt,
+    lock::Semaphore,
+};
 use snippet::Snippet;
 use std::{
     borrow::Cow,
@@ -193,6 +197,7 @@ pub struct Project {
     >,
     user_store: Model<UserStore>,
     fs: Arc<dyn Fs>,
+    ssh_session: Option<SshSession>,
     client_state: ProjectClientState,
     collaborators: HashMap<proto::PeerId, Collaborator>,
     client_subscriptions: Vec<client::Subscription>,
@@ -759,6 +764,7 @@ impl Project {
                 client,
                 user_store,
                 fs,
+                ssh_session: None,
                 next_entry_id: Default::default(),
                 next_diagnostic_group_id: Default::default(),
                 diagnostics: Default::default(),
@@ -891,6 +897,7 @@ impl Project {
                 languages,
                 user_store: user_store.clone(),
                 fs,
+                ssh_session: None,
                 next_entry_id: Default::default(),
                 next_diagnostic_group_id: Default::default(),
                 diagnostic_summaries: Default::default(),
@@ -1286,6 +1293,10 @@ impl Project {
 
     pub fn fs(&self) -> &Arc<dyn Fs> {
         &self.fs
+    }
+
+    pub fn set_ssh_session(&mut self, session: SshSession) {
+        self.ssh_session = Some(session);
     }
 
     pub fn remote_id(&self) -> Option<u64> {
@@ -11389,6 +11400,7 @@ impl<P: AsRef<Path>> From<(WorktreeId, P)> for ProjectPath {
 pub struct ProjectLspAdapterDelegate {
     project: WeakModel<Project>,
     worktree: worktree::Snapshot,
+    ssh_session: Option<SshSession>,
     fs: Arc<dyn Fs>,
     http_client: Arc<dyn HttpClient>,
     language_registry: Arc<LanguageRegistry>,
@@ -11403,6 +11415,7 @@ impl ProjectLspAdapterDelegate {
     ) -> Arc<Self> {
         Arc::new(Self {
             project: cx.weak_model(),
+            ssh_session: project.ssh_session.clone(),
             worktree: worktree.read(cx).snapshot(),
             fs: project.fs.clone(),
             http_client: project.client.http_client(),
@@ -11413,7 +11426,8 @@ impl ProjectLspAdapterDelegate {
 
     async fn load_shell_env(&self) {
         let worktree_abs_path = self.worktree.abs_path();
-        let shell_env = load_shell_environment(&worktree_abs_path)
+        let shell_env = self
+            .load_shell_environment(&worktree_abs_path)
             .await
             .with_context(|| {
                 format!("failed to determine load login shell environment in {worktree_abs_path:?}")
@@ -11421,6 +11435,97 @@ impl ProjectLspAdapterDelegate {
             .log_err()
             .unwrap_or_default();
         *self.shell_env.lock() = Some(shell_env);
+    }
+
+    async fn load_shell_environment(&self, dir: &Path) -> Result<HashMap<String, String>> {
+        let marker = "ZED_SHELL_START";
+        let shell = self.get_env_var("SHELL").await?;
+
+        // What we're doing here is to spawn a shell and then `cd` into
+        // the project directory to get the env in there as if the user
+        // `cd`'d into it. We do that because tools like direnv, asdf, ...
+        // hook into `cd` and only set up the env after that.
+        //
+        // In certain shells we need to execute additional_command in order to
+        // trigger the behavior of direnv, etc.
+        //
+        //
+        // The `exit 0` is the result of hours of debugging, trying to find out
+        // why running this command here, without `exit 0`, would mess
+        // up signal process for our process so that `ctrl-c` doesn't work
+        // anymore.
+        //
+        // We still don't know why `$SHELL -l -i -c '/usr/bin/env -0'`  would
+        // do that, but it does, and `exit 0` helps.
+        let additional_command = PathBuf::from(&shell)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .and_then(|shell| match shell {
+                "fish" => Some("emit fish_prompt;"),
+                _ => None,
+            });
+
+        let command = format!(
+            "cd '{}';{} printf '%s' {marker}; /usr/bin/env; exit 0;",
+            dir.display(),
+            additional_command.unwrap_or("")
+        );
+
+        let output = smol::process::Command::new(&shell)
+            .args(["-i", "-c", &command])
+            .output()
+            .await
+            .context("failed to spawn login shell to source login environment variables")?;
+
+        anyhow::ensure!(
+            output.status.success(),
+            "login shell exited with error {:?}",
+            output.status
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let env_output_start = stdout.find(marker).ok_or_else(|| {
+            anyhow!(
+                "failed to parse output of `env` command in login shell: {}",
+                stdout
+            )
+        })?;
+
+        let mut parsed_env = HashMap::default();
+        let env_output = &stdout[env_output_start + marker.len()..];
+
+        parse_env_output(env_output, |key, value| {
+            parsed_env.insert(key, value);
+        });
+
+        Ok(parsed_env)
+    }
+
+    async fn get_env_var(&self, key: &str) -> Result<String> {
+        if let Some(session) = &self.ssh_session {
+            let mut env_process = session.spawn_process("env -0".into()).await;
+            let mut output = String::new();
+            env_process.stdout.read_to_string(&mut output).await?;
+            return output
+                .split('\0')
+                .find_map(|var| {
+                    let mut parts = var.splitn(2, '=');
+                    let key = parts.next()?;
+                    let value = parts.next()?;
+                    if key == "SHELL" {
+                        Some(value.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    anyhow!("SHELL environment variable not found in remote shell env")
+                });
+        }
+
+        env::var(key).context(
+            "SHELL environment variable is not assigned so we can't source login environment variables",
+        )
     }
 }
 
@@ -11625,72 +11730,6 @@ fn include_text(server: &lsp::LanguageServer) -> bool {
             lsp::TextDocumentSyncSaveOptions::SaveOptions(options) => options.include_text,
         })
         .unwrap_or(false)
-}
-
-async fn load_shell_environment(dir: &Path) -> Result<HashMap<String, String>> {
-    let marker = "ZED_SHELL_START";
-    let shell = env::var("SHELL").context(
-        "SHELL environment variable is not assigned so we can't source login environment variables",
-    )?;
-
-    // What we're doing here is to spawn a shell and then `cd` into
-    // the project directory to get the env in there as if the user
-    // `cd`'d into it. We do that because tools like direnv, asdf, ...
-    // hook into `cd` and only set up the env after that.
-    //
-    // In certain shells we need to execute additional_command in order to
-    // trigger the behavior of direnv, etc.
-    //
-    //
-    // The `exit 0` is the result of hours of debugging, trying to find out
-    // why running this command here, without `exit 0`, would mess
-    // up signal process for our process so that `ctrl-c` doesn't work
-    // anymore.
-    //
-    // We still don't know why `$SHELL -l -i -c '/usr/bin/env -0'`  would
-    // do that, but it does, and `exit 0` helps.
-    let additional_command = PathBuf::from(&shell)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .and_then(|shell| match shell {
-            "fish" => Some("emit fish_prompt;"),
-            _ => None,
-        });
-
-    let command = format!(
-        "cd '{}';{} printf '%s' {marker}; /usr/bin/env; exit 0;",
-        dir.display(),
-        additional_command.unwrap_or("")
-    );
-
-    let output = smol::process::Command::new(&shell)
-        .args(["-i", "-c", &command])
-        .output()
-        .await
-        .context("failed to spawn login shell to source login environment variables")?;
-
-    anyhow::ensure!(
-        output.status.success(),
-        "login shell exited with error {:?}",
-        output.status
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let env_output_start = stdout.find(marker).ok_or_else(|| {
-        anyhow!(
-            "failed to parse output of `env` command in login shell: {}",
-            stdout
-        )
-    })?;
-
-    let mut parsed_env = HashMap::default();
-    let env_output = &stdout[env_output_start + marker.len()..];
-
-    parse_env_output(env_output, |key, value| {
-        parsed_env.insert(key, value);
-    });
-
-    Ok(parsed_env)
 }
 
 fn serialize_blame_buffer_response(blame: git::blame::Blame) -> proto::BlameBufferResponse {
