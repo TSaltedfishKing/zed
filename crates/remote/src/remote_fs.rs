@@ -1,15 +1,13 @@
 // todo!(remove)
 #![allow(unused)]
 
-use crate::{
-    protocol::{self as proto, envelope::Payload},
-    SshSession,
-};
+use crate::SshSession;
 use anyhow::{anyhow, Result};
 use async_tar::Archive;
 use fs::{CopyOptions, CreateOptions, Fs, Metadata, RemoveOptions, RenameOptions, Watcher};
 use futures::{AsyncRead, Stream};
 use git::repository::GitRepository;
+use rpc::proto::{self, envelope::Payload};
 use smol::stream::StreamExt;
 use std::{
     io,

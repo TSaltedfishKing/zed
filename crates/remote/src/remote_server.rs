@@ -2,9 +2,8 @@ use anyhow::{anyhow, Result};
 use fs::{Fs, RealFs};
 use futures::channel::mpsc::{self, UnboundedSender};
 use gpui::BackgroundExecutor;
-use remote::protocol::{
-    self as proto, envelope::Payload, read_message, write_message, Envelope, Error, MessageId,
-};
+use remote::protocol::{read_message, write_message, MessageId};
+use rpc::proto::{self, envelope::Payload, Envelope, Error};
 use smol::{io::AsyncWriteExt, stream::StreamExt, Async};
 use std::{
     env, io,
@@ -206,6 +205,7 @@ impl Response {
         self.0
             .tx
             .unbounded_send(Envelope {
+                original_sender_id: None,
                 id: 0,
                 payload: Some(payload),
                 responding_to: Some(self.0.id.0),
@@ -215,6 +215,8 @@ impl Response {
 
     fn send_error(&self, error: anyhow::Error) {
         self.send(Payload::Error(Error {
+            code: 0,
+            tags: Vec::new(),
             message: error.to_string(),
         }))
     }
@@ -224,6 +226,7 @@ impl Drop for ResponseInner {
     fn drop(&mut self) {
         self.tx
             .unbounded_send(Envelope {
+                original_sender_id: None,
                 id: 0,
                 payload: None,
                 responding_to: Some(self.id.0),

@@ -253,6 +253,19 @@ message Envelope {
         TaskContext task_context = 204;
         TaskTemplatesResponse task_templates_response = 205;
         TaskTemplates task_templates = 206;
+
+        // Remote
+        string string = 500;
+        ReadFile read_file = 501;
+        ReadDir read_dir = 502;
+        ReadLink read_link = 503;
+        Canonicalize canonicalize = 504;
+        Stat stat = 505;
+        Metadata metadata = 506;
+        Watch watch = 507;
+        Event event = 508;
+        WriteFile write_file = 509;
+        Pong pong = 510;
     }
 
     reserved 158 to 161;
@@ -2199,4 +2212,55 @@ message TaskSourceKind {
     message Language {
         string name = 1;
     }
+}
+
+// Remote FS
+
+message Pong {}
+
+message ReadFile {
+    string path = 1;
+}
+
+message WriteFile {
+    string path = 1;
+    string content = 2;
+    LineEnding line_ending = 3;
+
+    enum LineEnding {
+        Unix = 0;
+        Windows = 1;
+    }
+}
+
+message ReadDir {
+    string path = 1;
+}
+
+message ReadLink {
+    string path = 1;
+}
+
+message Canonicalize {
+    string path = 1;
+}
+
+message Watch {
+    string path = 1;
+    uint64 latency = 2;
+}
+
+message Stat {
+    string path = 1;
+}
+
+message Metadata {
+    uint64 inode = 1;
+    uint64 mtime = 2;
+    bool is_symlink = 3;
+    bool is_dir = 4;
+}
+
+message Event {
+    repeated string paths = 1;
 }

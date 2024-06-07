@@ -1,7 +1,5 @@
 use crate::protocol::{
-    envelope::{self, Payload},
-    message_len_from_buffer, read_message_with_len, write_message, Envelope, MessageId,
-    MESSAGE_LEN_SIZE,
+    message_len_from_buffer, read_message_with_len, write_message, MessageId, MESSAGE_LEN_SIZE,
 };
 use anyhow::{anyhow, Context as _, Result};
 use async_pipe::{PipeReader, PipeWriter};
@@ -14,6 +12,7 @@ use futures::{
 use futures::{select_biased, AsyncReadExt as _, FutureExt as _, StreamExt as _};
 use gpui::BackgroundExecutor;
 use parking_lot::Mutex;
+use rpc::proto::{envelope::Payload, Envelope};
 use smol::{fs::unix::MetadataExt, io, Async};
 use std::{
     net::{SocketAddr, TcpStream},
@@ -271,12 +270,13 @@ impl SshSession {
         })
     }
 
-    pub fn send(&self, payload: envelope::Payload) -> SshResponseStream {
+    pub fn send(&self, payload: Payload) -> SshResponseStream {
         let id = self.next_message_id.fetch_add(1, SeqCst);
         let (tx, rx) = mpsc::unbounded();
         self.requests.lock().insert(MessageId(id), tx);
         self.stdin_tx
             .unbounded_send(Envelope {
+                original_sender_id: None,
                 id,
                 responding_to: None,
                 payload: Some(payload),
@@ -314,7 +314,7 @@ pub struct SshChildProcess {
 }
 
 impl SshResponseStream {
-    pub async fn one(mut self) -> Result<envelope::Payload> {
+    pub async fn one(mut self) -> Result<Payload> {
         self.next()
             .await
             .ok_or_else(|| anyhow!("stream ended unexpectedly"))
@@ -322,7 +322,7 @@ impl SshResponseStream {
 }
 
 impl Stream for SshResponseStream {
-    type Item = envelope::Payload;
+    type Item = Payload;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

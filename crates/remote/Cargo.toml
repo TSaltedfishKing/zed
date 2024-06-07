@@ -36,12 +36,10 @@ gpui.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 prost.workspace = true
+rpc.workspace = true
 smol.workspace = true
 text.workspace = true
 util.workspace = true
-
-[build-dependencies]
-prost-build.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

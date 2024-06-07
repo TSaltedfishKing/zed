@@ -1,10 +1,8 @@
-use std::mem::size_of;
-
 use anyhow::Result;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message as _;
-
-include!(concat!(env!("OUT_DIR"), "/remote.messages.rs"));
+use rpc::proto::Envelope;
+use std::mem::size_of;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct MessageId(pub u32);
