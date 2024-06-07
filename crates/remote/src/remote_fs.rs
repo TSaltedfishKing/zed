@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use async_tar::Archive;
-use fs::{CopyOptions, CreateOptions, Fs, Metadata, RemoveOptions, RenameOptions};
+use fs::{CopyOptions, CreateOptions, Fs, Metadata, RemoveOptions, RenameOptions, Watcher};
 use futures::{AsyncRead, Stream};
 use git::repository::GitRepository;
 use smol::stream::StreamExt;
@@ -23,6 +23,8 @@ use text::{LineEnding, Rope};
 pub struct RemoteFs {
     session: SshSession,
 }
+
+struct RemoteWatcher {}
 
 impl RemoteFs {
     pub fn new(session: SshSession) -> Self {
@@ -205,17 +207,25 @@ impl Fs for RemoteFs {
         &self,
         path: &Path,
         latency: Duration,
-    ) -> Pin<Box<dyn Send + Stream<Item = Vec<PathBuf>>>> {
+    ) -> (
+        Pin<Box<dyn Send + Stream<Item = Vec<PathBuf>>>>,
+        Arc<(dyn Watcher + 'static)>,
+    ) {
         let stream = self.session.send(Payload::Watch(proto::Watch {
             path: path.to_string_lossy().to_string(),
             latency: latency.as_millis() as u64,
         }));
-        stream
-            .filter_map(|item| match item {
-                Payload::Event(event) => Some(event.paths.into_iter().map(PathBuf::from).collect()),
-                _ => None,
-            })
-            .boxed()
+        (
+            stream
+                .filter_map(|item| match item {
+                    Payload::Event(event) => {
+                        Some(event.paths.into_iter().map(PathBuf::from).collect())
+                    }
+                    _ => None,
+                })
+                .boxed(),
+            Arc::new(RemoteWatcher {}),
+        )
     }
 
     fn open_repo(&self, dotgit_path: &Path) -> Option<Arc<dyn GitRepository>> {
@@ -228,5 +238,15 @@ impl Fs for RemoteFs {
 
     async fn is_case_sensitive(&self) -> Result<bool> {
         Ok(false)
+    }
+}
+
+impl Watcher for RemoteWatcher {
+    fn add(&self, _path: &Path) -> Result<()> {
+        Err(anyhow!("not implemented"))
+    }
+
+    fn remove(&self, _path: &Path) -> Result<()> {
+        Err(anyhow!("not implemented"))
     }
 }

@@ -146,7 +146,7 @@ impl Server {
     }
 
     async fn watch(&self, request: proto::Watch, response: Response) -> Result<()> {
-        let mut stream = self
+        let (mut stream, _) = self
             .fs
             .watch(
                 Path::new(&request.path),
